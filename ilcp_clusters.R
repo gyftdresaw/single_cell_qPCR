@@ -51,6 +51,7 @@ colnames(ilcp_clusters) = paste(all_ilcp_clusters.cell_ids,all_ilcp_clusters.lab
 ilcp_clusters_norep = all_fn[,match(all_ilcp_clusters.cell_ids,as.numeric(all_filter.cell_ids))]
 colnames(ilcp_clusters_norep) = paste(all_ilcp_clusters.cell_ids,all_ilcp_clusters.labels)
 
+require(gplots)
 # recluster to see how well groups are recapitulated
 png('cluster_plots/ilcp_reclustered.png',width=1000,height=1000)
 heatmap.2(as.matrix(ilcp_clusters),trace='none',density.info='none',scale='none',
@@ -129,7 +130,6 @@ ggsave('cluster_plots/ilcp_clusters_pca13.png')
 # sort(abs(ilcp_clusters_pca$rotation[,1]))
 
 ## want to find genes distinguishing different clusters ##
-match('Nfil3',rownames(ilcp_clusters))
 
 # linear fit over groups on all genes to find most distinguishing genes
 ilcp_linfits = vector('list',dim(ilcp_clusters)[1])
@@ -138,9 +138,11 @@ for(i in 1:dim(ilcp_clusters)[1]){
   gene_index = i
   anova_test.df = data.frame(level=as.numeric(ilcp_clusters[gene_index,]),cluster=all_ilcp_clusters.labels)
   
-  linfit = lm(level~cluster,anova_test.df)
-  ilcp_linfits[[i]] = linfit
-  ilcp_anova[[i]] = anova(linfit)
+  if (sd(anova_test.df$level) > 0){
+    linfit = lm(level~cluster,anova_test.df)
+    ilcp_linfits[[i]] = linfit
+    ilcp_anova[[i]] = anova(linfit)
+  }
   # for printing specific results
   # summary(linfit)
   # anova(linfit)
@@ -148,61 +150,13 @@ for(i in 1:dim(ilcp_clusters)[1]){
 }
 
 # extract F test p values
-anova_fvals = sapply(ilcp_anova,function(x) x[[5]][1])
-anova_genes = rownames(ilcp_clusters)[anova_fvals < 0.05]
+ilcp_anova_fvals = sapply(ilcp_anova,
+                          function(x) if(is.null(x)) {return(NA)} else {return(x[[5]][1])})
+ilcp_anova_ind = ilcp_anova_fvals < 0.05
+ilcp_anova_ind[is.na(ilcp_anova_ind)] = F
+ilcp_anova_genes = rownames(ilcp_clusters)[ilcp_anova_ind]
 
-# make barplot of individual gene
-gene_index = 6
-anova_test.df = data.frame(level=as.numeric(ilcp_clusters[gene_index,]),cluster=all_ilcp_clusters.labels)
-
-# use helper function found below
-anova_sum = summarySE(anova_test.df,measurevar="level",groupvars=c("cluster"))
-
-g = ggplot(anova_test.df,aes(x=cluster,y=level))
-g = g + geom_point(size=4,position=position_jitter(width=0.3))
-g = g + ggtitle(rownames(ilcp_clusters)[gene_index])
-g = g + theme(axis.title=element_text(size=16,face='bold'))
-g = g + theme(axis.text=element_text(size=16))
-g = g + theme(title=element_text(size=16))
-g
-
-# ggsave('cluster_plots/Rorc_levels.png')
-
-# 31 genes out of 93 with p value < 0.05
-# sum(anova_fvals < 0.05)
-
-# heatmap these specific genes
-png('cluster_plots/ilcp_clusters_anova.png',width=1000,height=1000)
-heatmap.2(as.matrix(ilcp_clusters[anova_fvals < 0.05,]),trace='none',density.info='none',scale='none',Colv=F,
-          col=redgreen(100),
-          srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
-dev.off()
-
-# row scale
-png('cluster_plots/ilcp_clusters_anova_scale.png',width=1000,height=1000)
-heatmap.2(as.matrix(ilcp_clusters[anova_fvals < 0.05,]),trace='none',density.info='none',scale='row',Colv=F,
-          col=redgreen(100),breaks=seq(-3,3,length.out=101),
-          srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
-dev.off()
-
-# average across cells in groups
-agg_result = aggregate(t(ilcp_clusters),by=list(ID=all_ilcp_clusters.labels),mean)
-agg_ilcp_clusters = t(agg_result[,2:dim(agg_result)[2]])
-colnames(agg_ilcp_clusters) = agg_result$ID
-
-# heatmap average results
-png('cluster_plots/ilcp_clusters_ave_anova.png',width=1000,height=1000)
-heatmap.2(as.matrix(agg_ilcp_clusters[anova_fvals < 0.05,]),trace='none',density.info='none',scale='none',Colv=T,
-          col=redgreen(100),breaks=seq(-30,0,length.out=101),
-          srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
-dev.off()
-
-# row scaled
-png('cluster_plots/ilcp_clusters_ave_anova_scale.png',width=1000,height=1000)
-heatmap.2(as.matrix(agg_ilcp_clusters[anova_fvals < 0.05,]),trace='none',density.info='none',scale='row',Colv=T,
-          col=redgreen(100),srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
-dev.off()
-
+# summarySE helper function
 #############################
 ## Summarizes data.
 ## Gives count, mean, standard deviation, standard error of the mean, and confidence interval (default 95%).
@@ -247,6 +201,78 @@ summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
   return(datac)
 }
 
+#############
+require(ggplot2)
+# make scatterplot of individual gene
+ilcp_splot = function(gene,save=F){
+  gene_index = match(gene,rownames(ilcp_clusters))
+  anova_test.df = data.frame(level=as.numeric(ilcp_clusters[gene_index,]),cluster=all_ilcp_clusters.labels)
+  
+  # use helper function found below
+  anova_sum = summarySE(anova_test.df,measurevar="level",groupvars=c("cluster"))
+  
+  g = ggplot(anova_test.df,aes(x=cluster,y=level))
+  g = g + geom_point(size=4,position=position_jitter(width=0.3))
+  g = g + ggtitle(rownames(ilcp_clusters)[gene_index])
+  g = g + theme(axis.title=element_text(size=16,face='bold'))
+  g = g + theme(axis.text=element_text(size=16))
+  g = g + theme(title=element_text(size=16))
+  print(g)
+  
+  if (save){
+    ggsave(paste('cluster_plots/',gene,'_levels_ilcp.png',sep=''))
+  }
+}
+
+# 31 genes out of 93 with p value < 0.05
+# sum(anova_fvals < 0.05)
+
+# heatmap these specific genes
+png('cluster_plots/ilcp_clusters_anova.png',width=1000,height=1000)
+heatmap.2(as.matrix(ilcp_clusters[ilcp_anova_ind,]),trace='none',density.info='none',scale='none',Colv=F,
+          col=redgreen(100),
+          srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
+dev.off()
+
+# row scale
+png('cluster_plots/ilcp_clusters_anova_scale.png',width=1000,height=1000)
+heatmap.2(as.matrix(ilcp_clusters[ilcp_anova_ind,]),trace='none',density.info='none',scale='row',Colv=F,
+          col=redgreen(100),breaks=seq(-3,3,length.out=101),
+          srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
+dev.off()
+
+# heatmap specific genes with reclustering
+png('cluster_plots/ilcp_clusters_anova_recluster.png',width=1000,height=1000)
+heatmap.2(as.matrix(ilcp_clusters[ilcp_anova_ind,]),trace='none',density.info='none',scale='none',Colv=T,
+          col=redgreen(100),
+          srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
+dev.off()
+
+# row scale recluster
+png('cluster_plots/ilcp_clusters_anova_scale_recluster.png',width=1000,height=1000)
+heatmap.2(as.matrix(ilcp_clusters[ilcp_anova_ind,]),trace='none',density.info='none',scale='row',Colv=T,
+          col=redgreen(100),breaks=seq(-3,3,length.out=101),
+          srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
+dev.off()
+
+# average across cells in groups
+agg_result = aggregate(t(ilcp_clusters),by=list(ID=all_ilcp_clusters.labels),mean)
+agg_ilcp_clusters = t(agg_result[,2:dim(agg_result)[2]])
+colnames(agg_ilcp_clusters) = agg_result$ID
+
+# heatmap average results
+png('cluster_plots/ilcp_clusters_ave_anova.png',width=1000,height=1000)
+heatmap.2(as.matrix(agg_ilcp_clusters[ilcp_anova_ind,]),trace='none',density.info='none',scale='none',Colv=T,
+          col=redgreen(100),breaks=seq(-30,0,length.out=101),
+          srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
+dev.off()
+
+# row scaled
+png('cluster_plots/ilcp_clusters_ave_anova_scale.png',width=1000,height=1000)
+heatmap.2(as.matrix(agg_ilcp_clusters[ilcp_anova_ind,]),trace='none',density.info='none',scale='row',Colv=T,
+          col=redgreen(100),srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
+dev.off()
+
 ################################
 # fishers/chisquare testing of binary expression 
 #
@@ -262,9 +288,12 @@ for(i in 1:dim(ilcp_clusters_norep)[1]){
   bin_test.df = data.frame(level=as.numeric(ilcp_clusters_norep[gene_index,]),cluster=all_ilcp_clusters.labels)
   
   bin_table = table(factor(!is.na(bin_test.df$level),levels=c(FALSE,TRUE)),bin_test.df$cluster)
-
-  ilcp_fishtests[[i]] = fisher.test(bin_table)
-  ilcp_chitests[[i]] = chisq.test(bin_table,simulate.p.value=T)
+  
+  # only try fisher test if there are mixed proportions
+  if (sum(rowSums(bin_table) == 0) == 0){
+    ilcp_fishtests[[i]] = fisher.test(bin_table)
+    ilcp_chitests[[i]] = chisq.test(bin_table,simulate.p.value=T)
+  }
   
   # only try to fit linear model if more than one cluster is represented
   if (length(unique(bin_test.df[!is.na(bin_test.df$level),]$cluster)) > 1) {
@@ -274,15 +303,20 @@ for(i in 1:dim(ilcp_clusters_norep)[1]){
 }
 
 # extract p values
-fisher_pvals = sapply(ilcp_fishtests,function(x) x[[1]])
-chisq_pvals = sapply(ilcp_chitests,function(x) x[[3]])
+fisher_pvals = sapply(ilcp_fishtests,
+                      function(x) if (is.null(x)) {return(NA)} else{return(x[[1]])})
+chisq_pvals = sapply(ilcp_chitests,
+                     function(x) if (is.null(x)) {return(NA)} else{return(x[[3]])})
 # need to check for nulls (incomplete categories for anova)
 norep_anova_fvals = sapply(ilcp_norep_anova,
                            function(x) if (is.null(x)){return(NA)}else{return(x[[5]][1])})
 
 # these are pretty much the same, good correlation
 # going to just go with fisher test
+# fisher test also correlates well with simple anova from above
 fisher_genes = rownames(ilcp_clusters_norep)[fisher_pvals < 0.05]
+# remove na vals
+fisher_genes = fisher_genes[!is.na(fisher_genes)]
 norep_anova_genes = rownames(ilcp_clusters_norep)[norep_anova_fvals < 0.05]
 # remove na vals
 norep_anova_genes = norep_anova_genes[!is.na(norep_anova_genes)]
@@ -311,7 +345,9 @@ sig_gene_labels = paste(fish_pre,norep_anova_pre,rownames(ilcp_clusters_norep),s
 # logical indicator of genes of interest
 bin_ind = norep_anova_fvals < 0.05
 bin_ind[is.na(bin_ind)] = FALSE
-bin_ind = bin_ind | fisher_pvals < 0.05
+fish_ind = fisher_pvals < 0.05
+fish_ind[is.na(fish_ind)] = FALSE
+bin_ind = bin_ind | fish_ind
 
 # set new rownames
 bin_ilcp_clusters = ilcp_clusters
@@ -327,6 +363,20 @@ dev.off()
 # row scale
 png('cluster_plots/ilcp_clusters_bin_scale.png',width=1000,height=1000)
 heatmap.2(as.matrix(bin_ilcp_clusters[bin_ind,]),trace='none',density.info='none',scale='row',Colv=F,
+          col=redgreen(100),breaks=seq(-3,3,length.out=101),
+          srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
+dev.off()
+
+# heatmap specific binary genes wtih reclustering
+png('cluster_plots/ilcp_clusters_bin_recluster.png',width=1000,height=1000)
+heatmap.2(as.matrix(bin_ilcp_clusters[bin_ind,]),trace='none',density.info='none',scale='none',Colv=T,
+          col=redgreen(100),
+          srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
+dev.off()
+
+# row scale reclustering
+png('cluster_plots/ilcp_clusters_bin_scale_recluster.png',width=1000,height=1000)
+heatmap.2(as.matrix(bin_ilcp_clusters[bin_ind,]),trace='none',density.info='none',scale='row',Colv=T,
           col=redgreen(100),breaks=seq(-3,3,length.out=101),
           srtCol=90,cexRow=1.7,cexCol=1.5,margins=c(9,9),keysize=0.5)
 dev.off()
